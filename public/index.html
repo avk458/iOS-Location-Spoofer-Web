@@ -1210,7 +1210,7 @@ function updateStatus(){
   var same=Math.abs(WGS.lat-lockedWGS.lat)<0.00001&&Math.abs(WGS.lng-lockedWGS.lng)<0.00001;
   if(same){
     elStatusDot.className='status-dot saved';
-    elStatusText.textContent='已锁定 · '+WGS.lat.toFixed(4)+', '+WGS.lng.toFixed(4);
+    elStatusText.textContent='目标已保存 · '+WGS.lat.toFixed(4)+', '+WGS.lng.toFixed(4);
   }else{
     elStatusDot.className='status-dot unsaved';
     elStatusText.textContent='位置已移动，点「锁定」生效';
@@ -1476,7 +1476,7 @@ function lockLocation(){
     lockedWGS={lat:WGS.lat,lng:WGS.lng};
     $id('crosshair').classList.add('locked');
     setTimeout(function(){$id('crosshair').classList.remove('locked');},400);
-    toast('位置已锁定！请前往系统 定位服务 重新开关生效');
+    toast('目标已保存；请在地图中验证，保存成功不代表系统定位已改变');
     updateStatus();
     updateLockedPin(WGS.lat,WGS.lng);
   }).catch(function(){
