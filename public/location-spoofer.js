@@ -816,10 +816,14 @@
     }
 
     // Explicit, non-location diagnostic URL. Uses the same binary response API.
-    if (hasRequest && /^https:\/\/gs-loc(?:-cn)?\.apple\.com\/clls\/wloc\?spoofer_probe=1$/.test($request.url || "")) {
+    if (hasRequest && /^https:\/\/gs-loc(?:-cn)?\.apple\.com\/clls\/wloc\?spoofer_probe=[123]$/.test($request.url || "")) {
+      var probeText = "SPOOFER_BINARY_RESPONSE_OK_v3";
+      var probeBytes = ByteUtils.fromBinaryString(probeText);
+      var probeMode = ($request.url || "").slice(-1);
       $done({
-        headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
-        body: ByteUtils.fromBinaryString("SPOOFER_BINARY_RESPONSE_OK_v3")
+        status: 200,
+        headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", "Content-Length": String(probeBytes.length) },
+        body: probeMode === "2" ? probeBytes.buffer : probeMode === "3" ? probeText : probeBytes
       });
       return;
     }
