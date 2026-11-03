@@ -452,7 +452,7 @@
   }
 
   // 最小改写 Location 子消息：仅替换已存在的 纬度(1)/经度(2)/水平精度(3)，原值透传其余所有字段
-  function patchLocationRecord(locationBytes, config) {
+  function patchLocationRecord(locationBytes, config, stats) {
     if (!locationBytes || locationBytes.length === 0) return locationBytes;
     var fields = ProtobufEngine.readFields(locationBytes);
     var hasLat = false;
@@ -469,6 +469,7 @@
       return locationBytes;
     }
 
+    if (stats) stats.locations += 1;
     var parts = [];
     for (i = 0; i < fields.length; i += 1) {
       var f = fields[i];
@@ -485,13 +486,13 @@
     return ByteUtils.concat(parts);
   }
 
-  function patchWifiEntity(wifiBytes, config) {
+  function patchWifiEntity(wifiBytes, config, stats) {
     var fields = ProtobufEngine.readFields(wifiBytes);
     var parts = [];
     for (var i = 0; i < fields.length; i += 1) {
       var f = fields[i];
       if (f.fieldNumber === 2 && f.wireType === 2) {
-        parts.push(ProtobufEngine.makeLengthDelimitedField(2, patchLocationRecord(f.valueBytes, config)));
+        parts.push(ProtobufEngine.makeLengthDelimitedField(2, patchLocationRecord(f.valueBytes, config, stats)));
       } else {
         parts.push(f.raw);
       }
@@ -499,13 +500,13 @@
     return ByteUtils.concat(parts);
   }
 
-  function patchCellEntity(cellBytes, config) {
+  function patchCellEntity(cellBytes, config, stats) {
     var fields = ProtobufEngine.readFields(cellBytes);
     var parts = [];
     for (var i = 0; i < fields.length; i += 1) {
       var f = fields[i];
       if (f.fieldNumber === 5 && f.wireType === 2) {
-        parts.push(ProtobufEngine.makeLengthDelimitedField(5, patchLocationRecord(f.valueBytes, config)));
+        parts.push(ProtobufEngine.makeLengthDelimitedField(5, patchLocationRecord(f.valueBytes, config, stats)));
       } else {
         parts.push(f.raw);
       }
@@ -522,11 +523,13 @@
     for (var i = 0; i < fields.length; i += 1) {
       var f = fields[i];
       if (f.fieldNumber === 2 && f.wireType === 2) {
-        parts.push(ProtobufEngine.makeLengthDelimitedField(2, patchWifiEntity(f.valueBytes, config)));
-        wifiCount += 1;
+        var wifiStats = { locations: 0 };
+        parts.push(ProtobufEngine.makeLengthDelimitedField(2, patchWifiEntity(f.valueBytes, config, wifiStats)));
+        wifiCount += wifiStats.locations;
       } else if (CELL_RESPONSE_TAGS[f.fieldNumber] && f.wireType === 2) {
-        parts.push(ProtobufEngine.makeLengthDelimitedField(f.fieldNumber, patchCellEntity(f.valueBytes, config)));
-        cellCount += 1;
+        var cellStats = { locations: 0 };
+        parts.push(ProtobufEngine.makeLengthDelimitedField(f.fieldNumber, patchCellEntity(f.valueBytes, config, cellStats)));
+        cellCount += cellStats.locations;
       } else {
         // 关键：其余根级字段（包括 3, 4, 33 等）全量原样透传，不丢弃！
         parts.push(f.raw);
@@ -692,8 +695,10 @@
             patched.payload,
             extraction.suffix
           ]);
+        } else if (extraction.kind === "bare") {
+          finalResponse = patched.payload;
         } else {
-          finalResponse = buildSyntheticResponse(patched.payload, extraction.prefix);
+          finalResponse = ByteUtils.concat([buildSyntheticResponse(patched.payload, extraction.prefix), extraction.suffix]);
         }
 
         return {
@@ -705,7 +710,8 @@
           prefix: extraction.prefix ? ByteUtils.toHex(extraction.prefix, 8) : ""
         };
       }
-      strictError = new Error("No patchable location submessages via " + extraction.kind);
+      // A valid envelope without coordinates must remain byte-for-byte intact.
+      return { response: responseBytes, payload: extraction.payload, wifiCount: 0, cellCount: 0, kind: extraction.kind };
     }
 
     // 触发滑窗扫描兜底
@@ -804,7 +810,8 @@
     var hasResponse = typeof $response !== "undefined" && $response != null;
     var hasRequest = typeof $request !== "undefined" && $request != null;
 
-    if (!hasResponse && !hasRequest) {
+    if (!hasResponse) {
+      if (hasRequest) $done({});
       return;
     }
 
@@ -816,21 +823,23 @@
     }
 
     function completeResponse(bodyBytes, wifiCount, cellCount) {
-      var headers = ($response && $response.headers) ? $response.headers : {};
-      delete headers["Content-Encoding"];
-      delete headers["content-encoding"];
+      var headers = {};
+      var originalHeaders = $response.headers || {};
+      for (var name in originalHeaders) {
+        if (!Object.prototype.hasOwnProperty.call(originalHeaders, name)) continue;
+        var lower = name.toLowerCase();
+        if (lower !== "content-encoding" && lower !== "content-length" && lower !== "transfer-encoding") {
+          headers[name] = originalHeaders[name];
+        }
+      }
       headers["Content-Length"] = String(bodyBytes.length);
-      headers["X-Location-Spoofer"] = "active";
+      headers["X-Location-Spoofer"] = "response-v2";
       headers["X-Location-Spoofer-Wifi"] = String(wifiCount);
       headers["X-Location-Spoofer-Cell"] = String(cellCount);
 
-      $done({
-        response: {
-          status: 200,
-          headers: headers,
-          body: bodyBytes
-        }
-      });
+      // http-response rewrites return fields directly. The nested response object
+      // is for synthesizing a response from an http-request script.
+      $done({ headers: headers, body: bodyBytes });
     }
 
     function processRewrite(activeConfig) {
@@ -843,7 +852,13 @@
 
         var result = spoofAppleResponse(rawBody, activeConfig);
         if (activeConfig.debug) {
-          console.log("[Location Spoofer] Patched " + result.wifiCount + " Wi-Fi, " + result.cellCount + " Cell. Format: " + result.kind);
+          var changed = rawBody.length !== result.response.length;
+          for (var i = 0; !changed && i < rawBody.length; i += 1) changed = rawBody[i] !== result.response[i];
+          console.log("[Location Spoofer v2] Coordinates: " + result.wifiCount + " Wi-Fi, " + result.cellCount + " Cell; bytesChanged=" + changed + "; format=" + result.kind);
+        }
+        if (result.wifiCount + result.cellCount === 0) {
+          passThrough();
+          return;
         }
         completeResponse(result.response, result.wifiCount, result.cellCount);
       } catch (err) {
@@ -854,11 +869,9 @@
           passThrough();
         } else {
           $done({
-            response: {
-              status: "HTTP/1.1 500 Internal Server Error",
-              headers: { "Content-Type": "text/plain" },
-              body: "Location spoofing failed: " + err.message
-            }
+            status: 500,
+            headers: { "Content-Type": "text/plain" },
+            body: "Location spoofing failed: " + err.message
           });
         }
       }
@@ -866,6 +879,14 @@
 
     if (config.configUrl) {
       fetchRemoteConfig(config.configUrl, function (remoteData) {
+        if (!remoteData || remoteData.latitude == null || remoteData.longitude == null ||
+            !isFinite(Number(remoteData.latitude)) || Math.abs(Number(remoteData.latitude)) > 90 ||
+            !isFinite(Number(remoteData.longitude)) || Math.abs(Number(remoteData.longitude)) > 180) {
+          if (config.debug) console.log("[Location Spoofer v2] Remote config unavailable/invalid; unchanged response (no default-coordinate fallback)");
+          passThrough();
+          return;
+        }
+        if (config.debug) console.log("[Location Spoofer v2] Config source: remote");
         if (remoteData) {
           if (remoteData.latitude != null) config.latitude = Number(remoteData.latitude);
           if (remoteData.longitude != null) config.longitude = Number(remoteData.longitude);
