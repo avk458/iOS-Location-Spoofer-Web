@@ -815,6 +815,15 @@
       return;
     }
 
+    // Explicit, non-location diagnostic URL. Uses the same binary response API.
+    if (hasRequest && /^https:\/\/gs-loc(?:-cn)?\.apple\.com\/clls\/wloc\?spoofer_probe=1$/.test($request.url || "")) {
+      $done({
+        headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+        body: ByteUtils.fromBinaryString("SPOOFER_BINARY_RESPONSE_OK_v3")
+      });
+      return;
+    }
+
     var scriptArgs = typeof $argument === "string" ? parseArgumentString($argument) : {};
     var config = normalizeConfig(scriptArgs);
 

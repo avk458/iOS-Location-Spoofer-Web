@@ -73,3 +73,9 @@ test('malformed response fails open; request hook does not fabricate response', 
 test('deployed and root script copies stay identical', () => {
   assert.equal(source, fs.readFileSync(require.resolve('../location-spoofer.js'),'utf8'));
 });
+
+test('explicit diagnostic URL returns a binary marker without requiring config', () => {
+  const {result} = run(body, null, {$request:{url:'https://gs-loc-cn.apple.com/clls/wloc?spoofer_probe=1'}});
+  assert.ok(result.body instanceof Uint8Array);
+  assert.equal(Buffer.from(result.body).toString(), 'SPOOFER_BINARY_RESPONSE_OK_v3');
+});
