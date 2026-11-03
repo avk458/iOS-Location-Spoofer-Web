@@ -815,6 +815,8 @@
       return;
     }
 
+    if (typeof $argument === "string" && /(?:^|&)debug=true(?:&|$)/.test($argument)) console.log("[Location Spoofer build 4] Request URL: " + (hasRequest ? String($request.url) : "unavailable"));
+
     // Explicit, non-location diagnostic URL. Uses the same binary response API.
     if (hasRequest && /^https:\/\/gs-loc(?:-cn)?\.apple\.com\/clls\/wloc\?spoofer_probe=[123]$/.test($request.url || "")) {
       var probeText = "SPOOFER_BINARY_RESPONSE_OK_v3";
